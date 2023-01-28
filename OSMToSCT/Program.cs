@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Globalization;
 using System.IO;
 using System.Linq;
 using System.Text;
@@ -17,6 +18,7 @@ namespace OSMToSCT
             FileInfo singleFile;
             String path;
 
+            //check filename
             if (args.Length < 1)
             {
                 Console.WriteLine("No path specified. Enter path.");
@@ -37,6 +39,31 @@ namespace OSMToSCT
                 Console.ReadLine();
                 return;
             }
+            Console.WriteLine();
+
+            //check regionname
+            Console.WriteLine("Enter region name.");
+            String regionname = Console.ReadLine();
+            Console.WriteLine();
+
+            Console.WriteLine("Select region type");
+            Console.WriteLine("----------------------------------------------");
+            Console.WriteLine("0: Apron");
+            Console.WriteLine("1: Building");
+            Console.WriteLine("2: Grass");
+            Console.WriteLine("3: Taxiway");
+            Console.WriteLine("4: Runway");
+            Console.WriteLine("5: Background");
+            Console.WriteLine("6: Stand / Holding Point");
+            Console.WriteLine("7: White");
+            Console.WriteLine("8: Yellow");
+            Console.WriteLine("9: Red");
+            Console.WriteLine("10: Road");
+            Console.WriteLine("11: Disused");
+            Console.WriteLine("12: Coast");
+            Console.WriteLine("13: Danger");
+            Console.WriteLine("----------------------------------------------");
+            Int32 regiontype = Int32.Parse( Console.ReadLine() );
 
             if (!dir.Exists)
             {
@@ -44,7 +71,7 @@ namespace OSMToSCT
 
                 if (singleFile.Exists)
                 {
-                    ConvertToSCT(singleFile);
+                    ConvertToSCT(singleFile, regionname, regiontype);
                     Console.WriteLine("Done. Press enter to close.");
                     Console.ReadLine();
                     return;
@@ -62,7 +89,7 @@ namespace OSMToSCT
                 if (file.Name.ToUpper().Contains(".OSM") || file.Name.ToUpper().Contains(".XML"))
                 {
                     Console.WriteLine("Converting " + file.Name);
-                    ConvertToSCT(file);
+                    ConvertToSCT(file, regionname, regiontype);
                 }
                 else
                 {
@@ -74,7 +101,7 @@ namespace OSMToSCT
             Console.ReadLine();
         }
 
-        protected static void ConvertToSCT(FileInfo file)
+        protected static void ConvertToSCT(FileInfo file, String regionname, int areaType)
         {
             FileInfo newFile;
             StreamWriter newFileWriter;
@@ -86,6 +113,9 @@ namespace OSMToSCT
             decimal decLatitude;
             decimal decLongitude;
             int nodeId;
+
+            String[] regiondefs = { "Apron:smrGDapron", "Building:smrGDbuilding", "Grass:smrGDgrass", "Taxiway:smrGDtaxiway", "Runway:smrGDrunway", "Background:smrGDbackground", "Stand/Hold:standHold", "White:White", "Yellow:smrYellow", "Red:smrRed", "Road:smrRoad", "Disused:smrGDdisused", "Coastline:coast1", "Danger:danger" };
+            String[] regiondef = regiondefs[areaType].Split(':');
 
             nodeOrderList = new List<int>();
             nodeDict = new Dictionary<int, Point>();
@@ -106,8 +136,8 @@ namespace OSMToSCT
                     try
                     {
                         nodeId = Int32.Parse(xpNodeIterator.Current.GetAttribute("id", ""));
-                        decLatitude = Decimal.Parse(xpNodeIterator.Current.GetAttribute("lat", ""));
-                        decLongitude = Decimal.Parse(xpNodeIterator.Current.GetAttribute("lon", ""));
+                        decLatitude = Decimal.Parse(xpNodeIterator.Current.GetAttribute("lat", ""), CultureInfo.InvariantCulture);
+                        decLongitude = Decimal.Parse(xpNodeIterator.Current.GetAttribute("lon", ""), CultureInfo.InvariantCulture);
 
                         nodeDict.Add(nodeId, new Point() { Latitude = decLatitude, Longitude = decLongitude });
                     }
@@ -117,20 +147,36 @@ namespace OSMToSCT
                     }
                 }
 
-                // Iterate through the way definition
-                xpNodeIterator = xpNav.Select("/osm/way/nd");
-
+                // Iterate through the ways and write nodes to file
+                xpNodeIterator = xpNav.Select("/osm/way");
                 while (xpNodeIterator.MoveNext())
                 {
-                    try
+                    Console.WriteLine(String.Format("REGIONNAME {0} {1}", regionname, regiondef[0]));
+                    newFileWriter.WriteLine(String.Format("REGIONNAME {1}", regionname, regiondef[0]));
+                    Console.Write(regiondef[1]);
+                    newFileWriter.Write(regiondef[1]);
+
+                    XPathNodeIterator xpWays = xpNodeIterator.Current.SelectChildren("nd", "");
+                    while (xpWays.MoveNext())
                     {
-                        nodeId = Int32.Parse(xpNodeIterator.Current.GetAttribute("ref", ""));
-                        nodeOrderList.Add(nodeId);
+                        try
+                        {
+                            int nodeRef = Int32.Parse(xpWays.Current.GetAttribute("ref", ""));
+                            if (nodeDict.ContainsKey(nodeRef))
+                            {
+                                Console.WriteLine(String.Format("\t{0} {1}", LatitudeDecimalToDMS(nodeDict[nodeRef].Latitude), LongitudeDecimalToDMS(nodeDict[nodeRef].Longitude)));
+                                newFileWriter.WriteLine(String.Format("\t{0} {1}",
+                                                                      LatitudeDecimalToDMS(nodeDict[nodeRef].Latitude),
+                                                                      LongitudeDecimalToDMS(nodeDict[nodeRef].Longitude)));
+                            }
+                        }
+                        catch
+                        {
+                            Console.WriteLine("Error parsing ways: " + xpWays.Current.ToString() );
+                        }
                     }
-                    catch (FormatException formatException)
-                    {
-                        Console.WriteLine("Error parsing lat/lon: " + xpNodeIterator.Current.ToString() + Environment.NewLine + formatException.Message);
-                    }
+                    Console.WriteLine();
+                    newFileWriter.WriteLine();
                 }
             }
             catch (XmlException xmlException)
@@ -140,17 +186,6 @@ namespace OSMToSCT
             catch (ArgumentException argException)
             {
                 Console.WriteLine("Argument Error: " + argException.ToString());
-            }
-
-            // Write out the nodes in order
-            foreach (int nodeRef in nodeOrderList)
-            {
-                if (nodeDict.ContainsKey(nodeRef))
-                {
-                    newFileWriter.WriteLine(String.Format("\t{0} {1}",
-                                                          LatitudeDecimalToDMS(nodeDict[nodeRef].Latitude),
-                                                          LongitudeDecimalToDMS(nodeDict[nodeRef].Longitude)));
-                }
             }
 
             newFileWriter.Flush();
